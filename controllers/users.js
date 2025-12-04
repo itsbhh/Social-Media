@@ -2,17 +2,32 @@
 import User from "../models/User.js";
 import mongoose from "mongoose";
 
-// helper to ensure id comparison works for ObjectId or string
+const isValidObjectId = (id) => typeof id === "string" && mongoose.Types.ObjectId.isValid(id);
 const idEquals = (a, b) => {
   if (!a || !b) return false;
   return a.toString() === b.toString();
+};
+
+const formatUser = (u) => {
+  if (!u) return null;
+  const obj = u.toObject ? u.toObject() : u;
+  return {
+    _id: obj._id,
+    firstName: obj.firstName,
+    lastName: obj.lastName,
+    occupation: obj.occupation,
+    location: obj.location,
+    picturePath: obj.picturePath || "",
+  };
 };
 
 /* READ */
 export const getUser = async (req, res) => {
   try {
     const { id } = req.params;
-    if (!id) return res.status(400).json({ message: "Missing user id" });
+    if (!id || id === "undefined" || !isValidObjectId(id)) {
+      return res.status(400).json({ message: "Invalid or missing user id" });
+    }
 
     const user = await User.findById(id).lean().exec();
     if (!user) return res.status(404).json({ message: "User not found" });
@@ -27,7 +42,9 @@ export const getUser = async (req, res) => {
 export const getUserFriends = async (req, res) => {
   try {
     const { id } = req.params;
-    if (!id) return res.status(400).json({ message: "Missing user id" });
+    if (!id || id === "undefined" || !isValidObjectId(id)) {
+      return res.status(400).json({ message: "Invalid or missing user id" });
+    }
 
     const user = await User.findById(id).exec();
     if (!user) return res.status(404).json({ message: "User not found" });
@@ -35,20 +52,10 @@ export const getUserFriends = async (req, res) => {
     const friendIds = Array.isArray(user.friends) ? user.friends : [];
 
     const friends = await Promise.all(
-      friendIds.map((fid) => User.findById(fid).lean().exec())
+      friendIds.map((fid) => (isValidObjectId(fid) ? User.findById(fid).lean().exec() : null))
     );
 
-    const formattedFriends = friends
-      .filter(Boolean)
-      .map(({ _id, firstName, lastName, occupation, location, picturePath }) => ({
-        _id,
-        firstName,
-        lastName,
-        occupation,
-        location,
-        picturePath,
-      }));
-
+    const formattedFriends = friends.filter(Boolean).map(formatUser);
     res.status(200).json(formattedFriends);
   } catch (err) {
     console.error("getUserFriends error:", err);
@@ -58,7 +65,6 @@ export const getUserFriends = async (req, res) => {
 
 export const searchUsers = async (req, res) => {
   try {
-    // Accept either req.params.query or req.query.q for flexibility
     const query = req.params?.query || req.query?.q || "";
     if (!query) return res.status(400).json({ message: "Missing search query" });
 
@@ -68,10 +74,10 @@ export const searchUsers = async (req, res) => {
       $or: [
         { firstName: new RegExp(query, "i") },
         { lastName: new RegExp(query, "i") },
-        { email: new RegExp(query, "i") }, // optional helpful field
+        { email: new RegExp(query, "i") },
       ],
     })
-      .limit(50) // avoid huge results
+      .limit(50)
       .lean()
       .exec();
 
@@ -79,17 +85,7 @@ export const searchUsers = async (req, res) => {
       return res.status(404).json({ message: "No users found" });
     }
 
-    const formattedUsers = users.map(
-      ({ _id, firstName, lastName, occupation, location, picturePath }) => ({
-        _id,
-        firstName,
-        lastName,
-        occupation,
-        location,
-        picturePath,
-      })
-    );
-
+    const formattedUsers = users.map(formatUser);
     res.status(200).json(formattedUsers);
   } catch (err) {
     console.error("searchUsers error:", err);
@@ -101,26 +97,31 @@ export const searchUsers = async (req, res) => {
 export const addRemoveFriend = async (req, res) => {
   try {
     const { id, friendId } = req.params;
-    if (!id || !friendId) return res.status(400).json({ message: "Missing id or friendId" });
+    if (
+      !id ||
+      !friendId ||
+      id === "undefined" ||
+      friendId === "undefined" ||
+      !isValidObjectId(id) ||
+      !isValidObjectId(friendId)
+    ) {
+      return res.status(400).json({ message: "Invalid or missing id or friendId" });
+    }
 
-    // load both users
     const user = await User.findById(id).exec();
     const friend = await User.findById(friendId).exec();
 
     if (!user || !friend) return res.status(404).json({ message: "User or friend not found" });
 
-    // ensure friends arrays exist
     if (!Array.isArray(user.friends)) user.friends = [];
     if (!Array.isArray(friend.friends)) friend.friends = [];
 
     const alreadyFriends = user.friends.some((fid) => idEquals(fid, friendId));
 
     if (alreadyFriends) {
-      // remove friendship both sides
       user.friends = user.friends.filter((fid) => !idEquals(fid, friendId));
       friend.friends = friend.friends.filter((fid) => !idEquals(fid, id));
     } else {
-      // add friendship both sides (avoid dupes)
       if (!user.friends.some((fid) => idEquals(fid, friendId))) user.friends.push(friendId);
       if (!friend.friends.some((fid) => idEquals(fid, id))) friend.friends.push(id);
     }
@@ -128,20 +129,11 @@ export const addRemoveFriend = async (req, res) => {
     await user.save();
     await friend.save();
 
-    // return updated friend list for the user
-    const updatedFriendDocs = await Promise.all(user.friends.map((fid) => User.findById(fid).lean().exec()));
+    const updatedFriendDocs = await Promise.all(
+      user.friends.map((fid) => (isValidObjectId(fid) ? User.findById(fid).lean().exec() : null))
+    );
 
-    const formattedFriends = updatedFriendDocs
-      .filter(Boolean)
-      .map(({ _id, firstName, lastName, occupation, location, picturePath }) => ({
-        _id,
-        firstName,
-        lastName,
-        occupation,
-        location,
-        picturePath,
-      }));
-
+    const formattedFriends = updatedFriendDocs.filter(Boolean).map(formatUser);
     return res.status(200).json(formattedFriends);
   } catch (err) {
     console.error("addRemoveFriend error:", err);

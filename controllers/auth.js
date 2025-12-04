@@ -3,10 +3,24 @@ import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
 import User from "../models/User.js";
 
+const makeSafeUser = (u) => {
+  if (!u) return null;
+  const obj = u.toObject ? u.toObject() : u;
+  return {
+    _id: obj._id,
+    id: obj._id,
+    firstName: obj.firstName,
+    lastName: obj.lastName,
+    email: obj.email,
+    picturePath: obj.picturePath || "",
+    friends: Array.isArray(obj.friends) ? obj.friends : [],
+    location: obj.location || "",
+    occupation: obj.occupation || "",
+  };
+};
+
 export const register = async (req, res) => {
   try {
-    // When using multer.single('picture') -> file is in req.file
-    // Other fields come in req.body
     const {
       firstName,
       lastName,
@@ -15,21 +29,19 @@ export const register = async (req, res) => {
       friends,
       location,
       occupation,
-    } = req.body;
+    } = req.body || {};
 
     if (!firstName || !lastName || !email || !password) {
       return res.status(400).json({ error: "Missing required fields" });
     }
 
-    // prevent duplicate email
     const exists = await User.findOne({ email: email.toLowerCase() }).lean().exec();
     if (exists) return res.status(409).json({ error: "Email already registered" });
 
     const saltRounds = 10;
     const passwordHash = await bcrypt.hash(password, saltRounds);
 
-    // prefer file-based picture path if multer provided one
-    const picturePath = req.file ? req.file.filename || req.file.path : req.body.picturePath || "";
+    const picturePath = req.file ? (req.file.filename || req.file.path) : (req.body.picturePath || "");
 
     const newUser = new User({
       firstName,
@@ -37,7 +49,7 @@ export const register = async (req, res) => {
       email: email.toLowerCase(),
       password: passwordHash,
       picturePath,
-      friends: friends || [],
+      friends: Array.isArray(friends) ? friends : [],
       location,
       occupation,
       viewedProfile: Math.floor(Math.random() * 10000),
@@ -45,20 +57,8 @@ export const register = async (req, res) => {
     });
 
     const savedUser = await newUser.save();
-    // avoid returning password hash
-    const safeUser = (({ _id, firstName: f, lastName: l, email: e, picturePath: p, friends: fr, location: loc, occupation: occ, viewedProfile, impressions }) => ({
-      id: _id,
-      firstName: f,
-      lastName: l,
-      email: e,
-      picturePath: p,
-      friends: fr,
-      location: loc,
-      occupation: occ,
-      viewedProfile,
-      impressions
-    }))(savedUser.toObject());
 
+    const safeUser = makeSafeUser(savedUser);
     res.status(201).json(safeUser);
   } catch (err) {
     console.error("Register error:", err);
@@ -80,17 +80,7 @@ export const login = async (req, res) => {
 
     const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, { expiresIn: "7d" });
 
-    const safeUser = (({ _id, firstName, lastName, email: e, picturePath, friends, location, occupation }) => ({
-      id: _id,
-      firstName,
-      lastName,
-      email: e,
-      picturePath,
-      friends,
-      location,
-      occupation
-    }))(user.toObject());
-
+    const safeUser = makeSafeUser(user);
     res.status(200).json({ token, user: safeUser });
   } catch (err) {
     console.error("Login error:", err);
