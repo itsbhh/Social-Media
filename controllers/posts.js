@@ -1,11 +1,25 @@
+// controllers/posts.js
 import Post from "../models/Post.js";
 import User from "../models/User.js";
 
 /* CREATE */
 export const createPost = async (req, res) => {
   try {
-    const { userId, description, picturePath } = req.body;
-    const user = await User.findById(userId);
+    const { userId, description } = req.body || {};
+    // picturePath: prefer multer file if present
+    const picturePath = req.file
+      ? req.file.filename || req.file.path
+      : req.body.picturePath || "";
+
+    if (!userId || !description) {
+      return res.status(400).json({ message: "userId and description are required" });
+    }
+
+    const user = await User.findById(userId).lean().exec();
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
     const newPost = new Post({
       userId,
       firstName: user.firstName,
@@ -14,17 +28,20 @@ export const createPost = async (req, res) => {
       description,
       userPicturePath: user.picturePath,
       picturePath,
-      likes: {},
+      likes: new Map(),
       comments: [],
     });
+
     await newPost.save();
 
-    const post = await Post.find();
-    res.status(201).json(post);
+    const posts = await Post.find().sort({ createdAt: -1 }).lean().exec();
+    res.status(201).json(posts);
   } catch (err) {
-    res.status(409).json({ message: err.message });
+    console.error("createPost error:", err);
+    res.status(409).json({ message: err.message || "Could not create post" });
   }
 };
+
 
 /* READ */
 export const getFeedPosts = async (req, res) => {
